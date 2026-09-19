@@ -1,0 +1,128 @@
+name: CI/CD
+
+# Même découpage que le pipeline du backend (build -> package -> deploy), transposé au frontend :
+# - build   : installe les dépendances, lint, et build de production Vite (équivalent build+test,
+#             pas de suite de tests automatisés pour l'instant côté frontend).
+# - package : build & push de l'image Docker (Vite build -> Nginx) vers Artifact Registry.
+#             VITE_API_URL est injecté comme build-arg : Vite l'embarque dans le bundle statique au
+#             build, il ne peut pas être changé au runtime du conteneur.
+# - deploy  : déploiement sur Cloud Run (service public, site statique servi par Nginx).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GAR_LOCATION: ${{ vars.GCP_REGION }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REPOSITORY: task-manager
+  IMAGE_NAME: task-manager-frontend
+  SERVICE_NAME: task-manager-frontend
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check & build
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ vars.BACKEND_API_URL }}
+
+  package:
+    name: Build & push Docker image
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GAR_LOCATION}-docker.pkg.dev" --quiet
+
+      - name: Compute image tag
+        id: image
+        run: |
+          IMAGE="${GAR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
+          echo "base=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE:${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg VITE_API_URL="${{ vars.BACKEND_API_URL }}" \
+            -t "${{ steps.image.outputs.image }}" \
+            -t "${{ steps.image.outputs.base }}:latest" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "${{ steps.image.outputs.image }}"
+          docker push "${{ steps.image.outputs.base }}:latest"
+
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.GAR_LOCATION }}
+          image: ${{ needs.package.outputs.image }}
+          flags: --allow-unauthenticated --port=8080 --min-instances=0 --max-instances=4 --memory=256Mi --update-labels=^,^managed-by=github-actions,commit-sha=${{ github.sha }}
+
+      - name: Show deployed URL
+        run: echo "Site déployé sur ${{ steps.deploy.outputs.url }}"
