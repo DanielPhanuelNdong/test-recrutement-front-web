@@ -122,7 +122,7 @@ jobs:
           service: ${{ env.SERVICE_NAME }}
           region: ${{ env.GAR_LOCATION }}
           image: ${{ needs.package.outputs.image }}
-          flags: --allow-unauthenticated --port=8080 --min-instances=0 --max-instances=4 --memory=256Mi --update-labels=^,^managed-by=github-actions,commit-sha=${{ github.sha }}
+          flags: --allow-unauthenticated --port=8080 --min-instances=0 --max-instances=4 --memory=256Mi
 
       - name: Show deployed URL
         run: echo "Site déployé sur ${{ steps.deploy.outputs.url }}"
