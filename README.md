@@ -1,92 +1,103 @@
-# Task Manager — Frontend (React + Vite + Redux Toolkit)
+# Task Manager — Frontend
 
-Interface web de la mini application de gestion de tâches ("Task Manager"), réalisée dans le cadre du test de recrutement. Consomme l'API du backend Spring Boot : [`recutement-test`](../recutement-test).
+Petite application de gestion de tâches, faite dans le cadre d'un test technique. Le frontend est en React/Vite et consomme l'API du backend Spring Boot ([`recutement-test`](../recutement-test)) : inscription/connexion, création/édition/suppression de tâches, filtres par statut et recherche.
 
-**Stack** : React 19 + Vite + TypeScript (TSX) + Tailwind CSS v4 + Redux Toolkit + React Router + Axios + react-hot-toast.
+## Stack
 
-## Architecture
+- React 19 + TypeScript + Vite
+- Redux Toolkit pour l'état global (auth + tâches)
+- React Router pour la navigation
+- Tailwind CSS v4
+- Axios pour les appels API
+- react-hot-toast pour les notifications
 
-```
-src/
-├── api/client.ts           # Instance Axios : injecte le JWT (Authorization: Bearer), normalise les erreurs API et gère le 401 (déconnexion + redirection /login)
-├── app/store.ts, hooks.ts  # Store Redux Toolkit (configureStore) + hooks typés (useAppDispatch/useAppSelector)
-├── features/auth/          # Slice Redux : register/login (createAsyncThunk), persistance du token en localStorage
-├── features/tasks/         # Slice Redux : CRUD tâches + filtres (statut, recherche) via createAsyncThunk
-├── components/             # ProtectedRoute, Navbar, TaskForm, TaskItem, TaskFilters
-├── pages/                  # LoginPage, RegisterPage, TasksPage
-└── types/                  # Types TS miroir des DTOs backend (Task, AuthResponse, ...)
-```
+## Lancer le projet en local
 
-## Choix techniques
-
-- **Redux Toolkit** plutôt que du `useState`/Context épars : centralise l'état d'authentification et la liste de tâches, avec des `createAsyncThunk` qui encapsulent chaque appel API et exposent des états `idle/loading/failed` exploitables directement dans l'UI.
-- **JWT stocké en `localStorage`** (clé `task_manager_token`), relu au démarrage du slice `auth` pour restaurer la session ; l'intercepteur Axios l'attache automatiquement à chaque requête et nettoie la session sur un `401`.
-- **Gestion des erreurs API** centralisée dans `api/client.ts` : les erreurs de validation (`fieldErrors`) et les messages d'erreur du backend (`ErrorResponse`) sont normalisés en un message unique, affiché via `react-hot-toast`.
-- **Filtrage par statut + recherche texte** géré côté serveur (`GET /api/tasks?status=...&search=...`), avec un debounce de 300 ms sur la recherche pour éviter une requête à chaque frappe.
-
-## Installation et exécution
+Prérequis : Node 22, et le backend qui tourne sur `http://localhost:8080` (voir son README).
 
 ```bash
 npm install
-cp .env.example .env.local   # puis ajuster VITE_API_URL si besoin
-npm run dev                  # http://localhost:5173
+cp .env.example .env.local
+npm run dev
 ```
 
-`VITE_API_URL` pointe par défaut vers `http://localhost:8080` (backend lancé en local). Pour cibler le backend déployé sur Cloud Run, mettre son URL dans `.env.local` (fichier ignoré par git, cf. `*.local` dans `.gitignore`).
+L'app démarre sur `http://localhost:5173`. Si le backend tourne sur une autre URL, il suffit d'ajuster `VITE_API_URL` dans `.env.local`.
+
+Autres commandes utiles :
+
+```bash
+npm run lint      # oxlint
+npm run build     # tsc -b && vite build -> dist/
+npm run preview   # sert le build de dist/ en local
+```
+
+## Organisation du code
+
+```
+src/
+├── api/client.ts           # instance Axios : ajoute le token JWT, gère les erreurs et le 401 (déco + redirection /login)
+├── app/                    # store Redux (store.ts) + hooks typés (hooks.ts)
+├── features/auth/          # slice Redux pour le login/register, token persisté en localStorage
+├── features/tasks/         # slice Redux pour le CRUD des tâches + filtres (statut, recherche)
+├── components/             # Navbar, TaskForm, TaskItem, TaskFilters, ProtectedRoute, ...
+├── pages/                  # LoginPage, RegisterPage, TasksPage
+└── types/                  # types TS qui reflètent les DTOs du backend
+```
+
+Le token JWT est stocké dans `localStorage` (clé `task_manager_token`) et relu au démarrage pour garder la session active. La recherche de tâches est debouncée (300ms) avant d'appeler l'API pour éviter de spammer le backend à chaque frappe.
+
+## Variables d'environnement
+
+| Variable | Description |
+|---|---|
+| `VITE_API_URL` | URL du backend. En local : `http://localhost:8080`. |
+
+Vite embarque les variables `VITE_*` directement dans le bundle au moment du build — ce n'est pas une variable d'environnement lue au runtime du conteneur. Concrètement, changer l'URL du backend en prod veut dire rebuild + redéploiement, pas juste modifier une variable sur le service Cloud Run.
 
 ## CORS
 
-Le backend n'autorise que les origines listées dans sa variable d'environnement `CORS_ALLOWED_ORIGINS`. En local, `http://localhost:5173` est autorisé par défaut côté backend. Pour un déploiement de ce frontend (Cloud Run, Firebase Hosting, ...), son URL doit être ajoutée à la variable GitHub `CORS_ALLOWED_ORIGINS` du dépôt backend, sans quoi le navigateur bloquera les requêtes malgré un backend fonctionnel.
+Le backend n'autorise que les origines listées dans `CORS_ALLOWED_ORIGINS` côté serveur. En local, `http://localhost:5173` est déjà autorisé. Si tu déploies ce frontend ailleurs, il faut ajouter son URL à cette variable côté backend, sinon le navigateur bloque les requêtes même si le backend répond normalement.
 
-## Build de production
+## CI/CD
 
-```bash
-npm run build   # tsc -b && vite build -> dist/
-npm run preview # sert le build de dist/ en local
-```
+Le pipeline GitHub Actions (`.github/workflows/ci-cd.yml`) se déclenche automatiquement :
+- sur chaque **pull request** vers `main` → seul le job `build` tourne (lint + build), pour valider que ça compile avant de merger.
+- sur chaque **push sur `main`** → les trois jobs s'enchaînent : `build` → `package` → `deploy`.
 
-## CI/CD (GitHub Actions → GCP Cloud Run)
+Il n'y a rien à lancer manuellement, il suffit de push. Pour suivre l'exécution : onglet **Actions** du repo.
 
-Le pipeline (`.github/workflows/ci-cd.yml`) suit le même découpage que celui du backend :
-
-| Job | Déclenchement | Rôle |
-|---|---|---|
-| `build` | push + pull request | `npm ci`, lint (`oxlint`), `tsc -b && vite build` |
-| `package` | push sur `main` uniquement, après `build` | Build de l'image Docker (`Dockerfile` : build Vite → Nginx) et push vers Artifact Registry |
-| `deploy` | push sur `main` uniquement, après `package` | Déploiement sur **Cloud Run** (service public, site statique) |
-
-Différence clé avec un backend : `VITE_API_URL` est embarqué **au build** (Vite l'injecte dans le bundle JS statique), pas au runtime du conteneur. Il est donc passé en `--build-arg` à `docker build`, à partir de la variable GitHub `BACKEND_API_URL` — changer cette variable nécessite un nouveau build+déploiement, pas juste une mise à jour d'env var sur le service Cloud Run.
-
-### Réutilisation de l'infra GCP du backend
-
-Ce frontend est déployé dans le **même projet GCP** que le backend (`test-recrutement-509008`), avec le même compte de service `github-actions-deployer` (déjà créé et configuré, cf. le README du [backend](../recutement-test)). Il possède déjà les rôles nécessaires (`roles/artifactregistry.writer`, `roles/run.admin`, `roles/iam.serviceAccountUser`) — aucune nouvelle ressource IAM à créer côté GCP. L'image est poussée dans le dépôt Artifact Registry existant `task-manager` (créé pour le backend), sous un nom d'image différent (`task-manager-frontend`).
-
-### Secrets et variables GitHub à configurer (sur *ce* dépôt)
-
-Les secrets/variables ne sont pas partagés entre dépôts GitHub : même si le backend les a déjà, il faut les redéfinir ici, dans **Settings → Secrets and variables → Actions** de `test-recrutement-front-web` :
-
-**Secrets** (`Repository secrets`)
-| Nom | Contenu |
+| Job | Ce qu'il fait |
 |---|---|
-| `GCP_SA_KEY` | Même contenu JSON que côté backend (clé du compte de service `github-actions-deployer`) |
+| `build` | `npm ci`, lint, `tsc -b && vite build` |
+| `package` | build de l'image Docker (Vite build → servi par Nginx) et push sur Artifact Registry |
+| `deploy` | déploiement sur Cloud Run |
 
-**Variables** (`Repository variables`)
+Le frontend est déployé dans le même projet GCP que le backend (`test-recrutement-509008`), avec le même service account (`github-actions-deployer`), déjà configuré avec les bons rôles. L'image part dans le dépôt Artifact Registry existant `task-manager`, juste sous un nom différent (`task-manager-frontend`).
+
+### Config à faire une fois sur le repo GitHub
+
+Les secrets et variables ne sont pas partagés entre repos, même si le backend les a déjà il faut les remettre ici (**Settings → Secrets and variables → Actions**) :
+
+**Secrets**
+| Nom | Valeur |
+|---|---|
+| `GCP_SA_KEY` | clé JSON du service account `github-actions-deployer` (même que côté backend) |
+
+**Variables**
 | Nom | Exemple |
 |---|---|
 | `GCP_PROJECT_ID` | `test-recrutement-509008` |
 | `GCP_REGION` | `europe-west1` |
-| `BACKEND_API_URL` | `https://task-manager-backend-d34k53zaza-ew.a.run.app` (URL du backend déployé) |
+| `BACKEND_API_URL` | URL du backend déployé, ex `https://task-manager-backend-d34k53zaza-ew.a.run.app` |
 
-### CORS côté backend
+L'URL Cloud Run de ce frontend est prévisible avant même le premier déploiement (le suffixe est basé sur le numéro du projet GCP) : `https://task-manager-frontend-646783674843.europe-west1.run.app`. Elle doit être ajoutée à `CORS_ALLOWED_ORIGINS` côté backend pour que les appels API passent une fois déployé.
 
-Le backend n'autorise que les origines listées dans sa variable `CORS_ALLOWED_ORIGINS` (cf. README backend). L'URL Cloud Run de ce frontend est **prévisible avant le premier déploiement** (le suffixe numérique dans `https://<service>-<PROJECT_NUMBER>.<region>.run.app` est basé sur le numéro du projet GCP, stable et identique pour tous les services du projet) : `https://task-manager-frontend-646783674843.europe-west1.run.app`. Cette URL a déjà été ajoutée à `CORS_ALLOWED_ORIGINS` sur le service Cloud Run du backend — mais uniquement en édition directe (`gcloud run services update`), qui sera **écrasée** au prochain déploiement du pipeline backend. Il faut donc aussi ajouter cette URL à la variable GitHub `CORS_ALLOWED_ORIGINS` du dépôt backend pour que ce soit permanent.
+### En cas de souci
 
-### Dépannage
+Voir la section Dépannage du [README backend](../recutement-test#dépannage) — les mêmes pièges s'appliquent ici (Actions désactivées par défaut sur un compte/repo neuf, vérif email/téléphone/paiement sur le compte GitHub owner...).
 
-Voir la section [Dépannage du README backend](../recutement-test#dépannage) : les mêmes pièges s'appliquent ici (Actions potentiellement désactivées par défaut sur un dépôt/compte neuf → bouton "Enable Actions on this repository" dans l'onglet Actions ; si ça échoue, vérifier email/téléphone vérifiés et moyen de paiement renseigné sur le compte GitHub propriétaire du dépôt).
+## À faire
 
-## Prochaines étapes
-
-- [x] Dockerfile (build Vite → Nginx) + workflow CI/CD (build → package → deploy Cloud Run)
-- [ ] Premier déploiement effectif (nécessite de configurer les secrets/variables GitHub ci-dessus puis de pousser sur `main`)
+- [x] Dockerfile + pipeline CI/CD (build → package → deploy)
+- [ ] Premier déploiement (config des secrets/variables GitHub à faire, puis push sur `main`)
 - [ ] Tests (composants, slices Redux)
